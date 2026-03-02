@@ -1,0 +1,5 @@
+# Test configuration for PyTorch job
+learning_rate: 0.001
+batch_size: 32
+num_iterations: 5
+message: "Hello from YAML config!"

@@ -1,0 +1,26 @@
+[project]
+name = "coalesce"
+version = "0.1.0"
+description = "Simple tools for launching jobs on cloud compute"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+requires-python = ">=3.10"
+dependencies = [
+    "google-cloud-aiplatform",
+    "google-cloud-storage",
+    "setuptools",
+    "pyyaml",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "ipython",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/coalesce"]
