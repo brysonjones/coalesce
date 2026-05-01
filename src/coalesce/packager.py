@@ -57,6 +57,7 @@ def package_and_upload(
     package_names: list[str],
     bucket_name: str,
     project_id: str,
+    prefix: str = "source",
 ) -> str:
     """
     Package Python packages and upload to GCS.
@@ -138,7 +139,8 @@ def package_and_upload(
         storage_client = storage.Client(project=project_id)
         bucket = storage_client.bucket(bucket_name)
 
-        gcs_blob_name = f"source/{zip_filename}"
+        prefix_normalized = prefix.strip("/")
+        gcs_blob_name = f"{prefix_normalized}/{zip_filename}" if prefix_normalized else zip_filename
         blob = bucket.blob(gcs_blob_name)
 
         blob.upload_from_filename(str(zip_path))

@@ -1,6 +1,6 @@
 [project]
 name = "coalesce"
-version = "0.1.0"
+version = "0.1.1"
 description = "Simple tools for launching jobs on cloud compute"
 readme = "README.md"
 license = {text = "Apache-2.0"}

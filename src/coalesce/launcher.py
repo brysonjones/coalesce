@@ -1,7 +1,9 @@
 """Launch Python functions on GCP Vertex AI."""
 
 import shutil
+import subprocess
 import tempfile
+import time
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -17,6 +19,7 @@ def _upload_config_to_gcs(
     config_path: str | Path,
     bucket_name: str,
     project_id: str,
+    prefix: str = "configs",
 ) -> str:
     """Upload a config file to GCS and return the URI."""
     config_path = Path(config_path)
@@ -24,7 +27,9 @@ def _upload_config_to_gcs(
         raise FileNotFoundError(f"Config file not found: {config_path}")
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    gcs_blob_name = f"configs/{config_path.stem}_{timestamp}{config_path.suffix}"
+    prefix_normalized = prefix.strip("/")
+    filename = f"{config_path.stem}_{timestamp}{config_path.suffix}"
+    gcs_blob_name = f"{prefix_normalized}/{filename}" if prefix_normalized else filename
 
     storage_client = storage.Client(project=project_id)
     bucket = storage_client.bucket(bucket_name)
@@ -34,6 +39,176 @@ def _upload_config_to_gcs(
     gcs_uri = f"gs://{bucket_name}/{gcs_blob_name}"
     print(f"  Uploaded config to: {gcs_uri}")
     return gcs_uri
+
+
+def _custom_job_id(resource_name: str) -> str:
+    """Extract the final custom job id from a Vertex AI resource name."""
+    return resource_name.rsplit("/", 1)[-1]
+
+
+def _normalize_gcs_bucket_and_prefix(bucket: str) -> tuple[str, str]:
+    normalized = bucket[5:] if bucket.startswith("gs://") else bucket
+    bucket_name, _, prefix = normalized.partition("/")
+    if not bucket_name:
+        raise ValueError("bucket must include a bucket name")
+    return bucket_name, prefix.strip("/")
+
+
+def _join_gcs_parts(*parts: str) -> str:
+    return "/".join(part.strip("/") for part in parts if part.strip("/"))
+
+
+def _wait_for_resource_name(job: aiplatform.CustomJob, timeout_seconds: int = 300) -> str:
+    """Wait for async CustomJob creation to populate resource_name."""
+    deadline = time.monotonic() + timeout_seconds
+    last_error: Exception | None = None
+
+    while time.monotonic() < deadline:
+        try:
+            return job.resource_name
+        except RuntimeError as exc:
+            last_error = exc
+            time.sleep(1)
+
+    raise RuntimeError(
+        "Timed out waiting for Vertex AI to create the CustomJob resource. "
+        "The job may still have been submitted; check the Vertex AI console."
+    ) from last_error
+
+
+def _stream_custom_job_logs(
+    *,
+    custom_job_id: str,
+    project_id: str,
+    region: str,
+    polling_interval: int,
+    allow_multiline_logs: bool,
+) -> None:
+    filter_expr = f'resource.type="ml_job" AND resource.labels.job_id="{custom_job_id}"'
+    seen_insert_ids: set[str] = set()
+    terminal_states = {
+        "JOB_STATE_SUCCEEDED",
+        "JOB_STATE_FAILED",
+        "JOB_STATE_CANCELLED",
+        "JOB_STATE_EXPIRED",
+    }
+
+    while True:
+        _print_new_log_entries(
+            filter_expr=filter_expr,
+            project_id=project_id,
+            seen_insert_ids=seen_insert_ids,
+            allow_multiline_logs=allow_multiline_logs,
+        )
+
+        state = _custom_job_state(
+            custom_job_id=custom_job_id,
+            project_id=project_id,
+            region=region,
+        )
+        if state in terminal_states:
+            _print_new_log_entries(
+                filter_expr=filter_expr,
+                project_id=project_id,
+                seen_insert_ids=seen_insert_ids,
+                allow_multiline_logs=allow_multiline_logs,
+            )
+            print(f"Custom job {custom_job_id} finished with state: {state}")
+            return
+
+        time.sleep(polling_interval)
+
+
+def _custom_job_state(*, custom_job_id: str, project_id: str, region: str) -> str:
+    command = [
+        "gcloud",
+        "ai",
+        "custom-jobs",
+        "describe",
+        custom_job_id,
+        f"--project={project_id}",
+        f"--region={region}",
+        "--format=value(state)",
+    ]
+
+    try:
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "Could not stream Vertex AI logs because `gcloud` was not found. "
+            "Install the Google Cloud CLI or launch without stream_logs=True."
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f"Could not read Vertex AI custom job state for {custom_job_id} "
+            f"with exit code {exc.returncode}."
+        ) from exc
+
+    return result.stdout.strip()
+
+
+def _print_new_log_entries(
+    *,
+    filter_expr: str,
+    project_id: str,
+    seen_insert_ids: set[str],
+    allow_multiline_logs: bool,
+) -> None:
+    import json
+
+    command = [
+        "gcloud",
+        "logging",
+        "read",
+        filter_expr,
+        f"--project={project_id}",
+        "--format=json",
+        "--limit=200",
+    ]
+
+    try:
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "Could not stream Vertex AI logs because `gcloud` was not found. "
+            "Install the Google Cloud CLI or launch without stream_logs=True."
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.strip() if exc.stderr else ""
+        detail = f": {stderr}" if stderr else ""
+        raise RuntimeError(f"Could not read Vertex AI logs with exit code {exc.returncode}{detail}.") from exc
+
+    entries = json.loads(result.stdout or "[]")
+    for entry in reversed(entries):
+        insert_id = entry.get("insertId")
+        if insert_id and insert_id in seen_insert_ids:
+            continue
+        if insert_id:
+            seen_insert_ids.add(insert_id)
+
+        message = _log_entry_message(entry)
+        if not message:
+            continue
+        if allow_multiline_logs:
+            print(message)
+        else:
+            for line in message.splitlines():
+                print(line)
+
+
+def _log_entry_message(entry: dict[str, Any]) -> str:
+    if "textPayload" in entry:
+        return str(entry["textPayload"])
+    if "jsonPayload" in entry:
+        payload = entry["jsonPayload"]
+        if isinstance(payload, dict):
+            message = payload.get("message")
+            if message is not None:
+                return str(message)
+        return str(payload)
+    if "protoPayload" in entry:
+        return str(entry["protoPayload"])
+    return ""
 
 
 def launch_job(
@@ -53,6 +228,10 @@ def launch_job(
     env: dict[str, str] | None = None,
     scheduling_strategy: str = "STANDARD",
     max_wait_duration: int = 86400,
+    stream_logs: bool = False,
+    log_polling_interval: int = 10,
+    allow_multiline_logs: bool = True,
+    staging_prefix: str = ".coalesce/tmp",
 ) -> aiplatform.CustomJob:
     """
     Launch a Python function on GCP Vertex AI.
@@ -86,6 +265,10 @@ def launch_job(
                             - "FLEX_START" or "DWS": Queues until resources are available.
                               Required for a3-highgpu-1g/2g/4g machine types.
         max_wait_duration: Max wait time in seconds for FLEX_START scheduling (default: 86400 = 24h).
+        stream_logs: If True, submit the job asynchronously and stream Vertex AI logs locally.
+        log_polling_interval: Polling interval in seconds for gcloud log streaming.
+        allow_multiline_logs: Pass --allow-multiline-logs to gcloud log streaming.
+        staging_prefix: Prefix under the staging bucket for Vertex AI and coalesce temp artifacts.
 
     Returns:
         The CustomJob object
@@ -108,8 +291,10 @@ def launch_job(
     if sync_packages is None:
         sync_packages = []
 
-    # Normalize bucket name
-    bucket_normalized = bucket[5:] if bucket.startswith("gs://") else bucket
+    # Normalize bucket name and staging prefix
+    bucket_name, bucket_prefix = _normalize_gcs_bucket_and_prefix(bucket)
+    staging_root_prefix = _join_gcs_parts(bucket_prefix, staging_prefix)
+    staging_bucket_uri = f"gs://{bucket_name}/{staging_root_prefix}" if staging_root_prefix else f"gs://{bucket_name}"
 
     # Generate job name if not provided
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -128,7 +313,7 @@ def launch_job(
     aiplatform.init(
         project=project_id,
         location=region,
-        staging_bucket=f"gs://{bucket_normalized}",
+        staging_bucket=staging_bucket_uri,
     )
 
     # Determine module name - function must be imported from an actual module
@@ -165,8 +350,9 @@ def launch_job(
             print(f"  Config: {config_path.name}")
             config_gcs_uri = _upload_config_to_gcs(
                 config_path=config_path,
-                bucket_name=bucket_normalized,
+                bucket_name=bucket_name,
                 project_id=project_id,
+                prefix=_join_gcs_parts(staging_root_prefix, "configs"),
             )
             environment_variables["TASK_CONFIG_GCS_URI"] = config_gcs_uri
         else:
@@ -177,8 +363,9 @@ def launch_job(
         print(f"Packaging {len(sync_packages)} package(s) for sync...")
         gcs_uri = package_and_upload(
             package_names=sync_packages,
-            bucket_name=bucket_normalized,
+            bucket_name=bucket_name,
             project_id=project_id,
+            prefix=_join_gcs_parts(staging_root_prefix, "source"),
         )
         environment_variables["SYNC_PACKAGES_GCS_URI"] = gcs_uri
 
@@ -213,7 +400,7 @@ def launch_job(
     # Configure scheduling strategy
     from google.cloud.aiplatform_v1.types import custom_job as gca_custom_job_compat
 
-    run_kwargs: dict[str, Any] = {"sync": sync}
+    run_kwargs: dict[str, Any] = {"sync": False if stream_logs else sync}
     strategy = scheduling_strategy.upper()
     if strategy == "SPOT":
         print("  Scheduling: SPOT (preemptible, may be interrupted)")
@@ -229,7 +416,18 @@ def launch_job(
     print(f"Submitting job...")
     job.run(**run_kwargs)
 
-    if sync:
+    if stream_logs:
+        custom_job_id = _custom_job_id(_wait_for_resource_name(job))
+        print(f"Streaming logs for custom job: {custom_job_id}")
+        _stream_custom_job_logs(
+            custom_job_id=custom_job_id,
+            project_id=project_id,
+            region=region,
+            polling_interval=log_polling_interval,
+            allow_multiline_logs=allow_multiline_logs,
+        )
+        print(f"Job log stream finished: {job_name}")
+    elif sync:
         print(f"Job completed: {job_name}")
     else:
         print(f"Job submitted: {job_name}")
