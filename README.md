@@ -39,6 +39,7 @@ launch_job(
     config={"learning_rate": 0.001},          # or path to a YAML file
     machine_type="a2-highgpu-1g",
     accelerator_type="NVIDIA_TESLA_A100",
+    boot_disk_size_gb=500,                    # larger local disk for dataset copies
     sync_packages=["my_local_lib"],           # local packages to ship to the job
     extra_packages=["transformers"],          # pip install on remote before run
     scheduling_strategy="STANDARD",           # STANDARD | SPOT | FLEX_START

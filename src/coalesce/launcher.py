@@ -220,6 +220,8 @@ def launch_job(
     machine_type: str = "n1-standard-4",
     accelerator_type: str | None = "NVIDIA_TESLA_T4",
     accelerator_count: int = 1,
+    boot_disk_type: str = "pd-ssd",
+    boot_disk_size_gb: int = 100,
     sync_packages: list[str] | None = None,
     job_name: str | None = None,
     sync: bool = True,
@@ -246,6 +248,8 @@ def launch_job(
         accelerator_type: GPU type (e.g., "NVIDIA_TESLA_T4", "NVIDIA_TESLA_A100")
                          Set to None for CPU-only jobs.
         accelerator_count: Number of GPUs (default: 1)
+        boot_disk_type: Vertex AI boot disk type (default: "pd-ssd")
+        boot_disk_size_gb: Vertex AI boot disk size in GiB (default: 100)
         sync_packages: List of local Python package names to sync to the job.
                       These packages will be zipped and uploaded to GCS, then
                       extracted on the remote machine before running the function.
@@ -381,6 +385,8 @@ def launch_job(
         "script_path": str(task_py_dest),
         "container_uri": container_uri,
         "machine_type": machine_type,
+        "boot_disk_type": boot_disk_type,
+        "boot_disk_size_gb": boot_disk_size_gb,
         "environment_variables": environment_variables,
     }
 
