@@ -42,8 +42,26 @@ def test_launch_job_defaults_to_sync_wait(mock_vertex) -> None:
         staging_bucket="gs://demo-bucket/.coalesce/tmp",
     )
     assert from_local_script.call_args.kwargs["display_name"].startswith("sample_task_")
+    assert from_local_script.call_args.kwargs["boot_disk_type"] == "pd-ssd"
+    assert from_local_script.call_args.kwargs["boot_disk_size_gb"] == 100
     job.run.assert_called_once()
     assert job.run.call_args.kwargs["sync"] is True
+
+
+def test_launch_job_forwards_boot_disk_settings(mock_vertex) -> None:
+    _, from_local_script = mock_vertex
+
+    launcher.launch_job(
+        func=sample_task,
+        project_id="demo-project",
+        bucket="gs://demo-bucket",
+        container_uri="image",
+        boot_disk_type="pd-balanced",
+        boot_disk_size_gb=500,
+    )
+
+    assert from_local_script.call_args.kwargs["boot_disk_type"] == "pd-balanced"
+    assert from_local_script.call_args.kwargs["boot_disk_size_gb"] == 500
 
 
 def test_launch_job_preserves_bucket_prefix_for_staging(mock_vertex) -> None:
