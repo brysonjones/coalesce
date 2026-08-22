@@ -26,6 +26,18 @@ gcloud storage buckets add-iam-policy-binding gs://my-bucket \
   --role roles/storage.objectAdmin
 ```
 
+If you want Baseten to run one of the private `my-project` images rather
+than a public PyTorch one, the same account also needs to pull from Artifact
+Registry:
+
+```bash
+gcloud artifacts repositories add-iam-policy-binding my-repo \
+  --project my-project \
+  --location us \
+  --member "serviceAccount:coalesce-baseten@my-project.iam.gserviceaccount.com" \
+  --role roles/artifactregistry.reader
+```
+
 ```bash
 gcloud iam service-accounts keys create ~/coalesce-baseten-key.json \
   --iam-account coalesce-baseten@my-project.iam.gserviceaccount.com
@@ -69,8 +81,21 @@ python examples/baseten/run_smoke.py gpu --gpu H100 --stream-logs
 The mount test needs a prefix with at least one object in it:
 
 ```bash
-python examples/baseten/run_smoke.py mount --dataset gs://my-bucket/datasets/demo
+python examples/baseten/run_smoke.py mount --dataset gs://my-bucket/data
 ```
+
+## Using a private image
+
+Vertex AI pulls as the job's own service account, but Baseten pulls the image
+itself and needs credentials. coalesce wires those up automatically for any
+`*.pkg.dev` or `gcr.io` image, reusing the same secret:
+
+```bash
+python examples/baseten/run_smoke.py gpu --container-uri us-docker.pkg.dev/my-project/my-repo/my-image:latest
+```
+
+For a non-Google registry, pass `--container-uri` along with a
+`container_registry_secret` in your own `launch_job` call.
 
 ## Comparing providers
 
@@ -89,7 +114,7 @@ python examples/baseten/run_smoke.py all --provider vertex --gpu T4
 - `--gpu H100 --gpu-count 2` — portable GPU names, translated per provider.
 - `--gpu none` — CPU-only.
 - `--cpu-count 16 --memory 128Gi` — Baseten sizing.
-- `--machine-type a2-highgpu-1g --region us-central1` — Vertex sizing.
+- `--machine-type` — Vertex sizing. Chosen from `--gpu` by default (`H100` -> `a3-highgpu-1g`, which also switches scheduling to FLEX_START because Vertex requires it there).
 - `--spot` — interruptible capacity on either provider.
 - `--no-wait` — submit and return; `--stream-logs` — tail the remote logs.
 - `--container-uri` — override the provider's default image.

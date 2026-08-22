@@ -83,7 +83,7 @@ pip install 'coalesce[baseten] @ git+https://github.com/brysonjones/coalesce.git
 
 Export `BASETEN_API_KEY`. coalesce derives the `BASETEN_TRUSS_AUTH_*` variables truss needs from it, so there is no `truss login` step.
 
-A Baseten container has no ambient GCP identity, so it needs a service account key to reach your bucket. Create one with `roles/storage.objectAdmin` on the bucket, then store it as a Baseten secret:
+A Baseten container has no ambient GCP identity, so it needs a service account key to reach your bucket. Create one with `roles/storage.objectAdmin` on the bucket (plus `roles/artifactregistry.reader` if you want Baseten to pull a private image), then store it as a Baseten secret:
 
 ```bash
 python -m coalesce.providers.baseten ~/coalesce-baseten-key.json
@@ -100,7 +100,8 @@ coalesce injects it as `GCP_SERVICE_ACCOUNT_JSON` and the task runner turns it i
 | `boot_disk_type`, `boot_disk_size_gb` | No equivalent. Setting them prints a notice. Ephemeral NVMe is at `$BT_SCRATCH_DIR`; use `checkpoint_volume_gb` for persistent storage at `$BT_CHECKPOINT_DIR`. |
 | `scheduling_strategy="FLEX_START"` | Runs on dedicated capacity; Baseten queues for GPUs natively. |
 | `accelerator_type` | Vertex-only spelling. Names with a Baseten equivalent are mapped; the rest are an error. Use `gpu` instead. |
-| `mount_datasets`, `checkpoint_volume_gb`, `priority`, `baseten_project` | Baseten-only. |
+| `container_uri` | Baseten pulls the image itself, so a private one needs credentials. `*.pkg.dev` and `gcr.io` images reuse the GCP credentials secret automatically; anything else needs `container_registry_secret`. Vertex AI pulls as the job's own service account. |
+| `mount_datasets`, `checkpoint_volume_gb`, `priority`, `container_registry_secret`, `baseten_project` | Baseten-only. |
 
 ### Validating a deployment
 

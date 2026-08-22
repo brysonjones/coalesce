@@ -173,6 +173,7 @@ class JobSpec:
     # Baseten-only knobs.
     baseten_project: str | None = None
     gcp_credentials_secret: str = "gcp_service_account_json"
+    container_registry_secret: str | None = None
     mount_datasets: list[str] = field(default_factory=list)
     checkpoint_volume_gb: int | None = None
 

@@ -85,6 +85,7 @@ def launch_job(
     staging_prefix: str = ".coalesce/tmp",
     baseten_project: str | None = None,
     gcp_credentials_secret: str = "gcp_service_account_json",
+    container_registry_secret: str | None = None,
     mount_datasets: list[str] | None = None,
     checkpoint_volume_gb: int | None = None,
 ) -> Job | None:
@@ -156,6 +157,13 @@ def launch_job(
         gcp_credentials_secret: Name of the Baseten secret holding a GCP service
                                 account JSON key. This is what lets a Baseten
                                 job read and write your GCS bucket.
+        container_registry_secret: Baseten secret used to pull a private
+                                  container image. Defaults to
+                                  gcp_credentials_secret for images in a Google
+                                  registry (*.pkg.dev, gcr.io), which need that
+                                  account to also have artifactregistry.reader.
+                                  Baseten only; Vertex AI pulls as the job's own
+                                  service account.
         mount_datasets: Read-only GCS paths to mount into the container, given as
                         "gs://bucket/path:/container/path". Baseten only.
         checkpoint_volume_gb: Size of Baseten's persistent checkpoint volume, in
@@ -231,6 +239,7 @@ def launch_job(
         allow_multiline_logs=allow_multiline_logs,
         baseten_project=baseten_project,
         gcp_credentials_secret=gcp_credentials_secret,
+        container_registry_secret=container_registry_secret,
         mount_datasets=list(mount_datasets or []),
         checkpoint_volume_gb=checkpoint_volume_gb,
     )

@@ -29,6 +29,47 @@ from coalesce import launch_job  # noqa: E402
 DEFAULT_PROJECT_ID = os.environ.get("COALESCE_PROJECT_ID", "my-project")
 DEFAULT_BUCKET = os.environ.get("COALESCE_BUCKET", "gs://my-bucket")
 
+# Vertex AI only accepts a GPU on a machine type built for it, so picking one
+# is not optional the way it is on Baseten. Mirrors the profile table in
+# common Vertex GPU and machine-type pairings.
+VERTEX_MACHINE_TYPES = {
+    ("T4", 1): "n1-standard-4",
+    ("T4", 2): "n1-standard-8",
+    ("T4", 4): "n1-standard-16",
+    ("L4", 1): "g2-standard-4",
+    ("L4", 2): "g2-standard-24",
+    ("L4", 4): "g2-standard-48",
+    ("L4", 8): "g2-standard-96",
+    ("A100_40GB", 1): "a2-highgpu-1g",
+    ("A100_40GB", 2): "a2-highgpu-2g",
+    ("A100_40GB", 4): "a2-highgpu-4g",
+    ("A100_40GB", 8): "a2-highgpu-8g",
+    ("A100", 1): "a2-ultragpu-1g",
+    ("A100", 2): "a2-ultragpu-2g",
+    ("A100", 4): "a2-ultragpu-4g",
+    ("A100", 8): "a2-ultragpu-8g",
+    ("H100", 1): "a3-highgpu-1g",
+    ("H100", 2): "a3-highgpu-2g",
+    ("H100", 4): "a3-highgpu-4g",
+    ("H100", 8): "a3-highgpu-8g",
+}
+
+
+def vertex_machine_type(gpu: str | None, count: int) -> str:
+    """The machine type Vertex needs for this GPU, or a CPU-only default."""
+    from coalesce.spec import canonical_gpu
+
+    if gpu is None:
+        return "n1-standard-4"
+    key = (canonical_gpu(gpu), count)
+    if key not in VERTEX_MACHINE_TYPES:
+        raise SystemExit(
+            f"No Vertex machine type known for {gpu} x{count}. Pass "
+            f"--machine-type explicitly, or pick one of: "
+            + ", ".join(f"{g} x{c}" for g, c in sorted(VERTEX_MACHINE_TYPES))
+        )
+    return VERTEX_MACHINE_TYPES[key]
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -54,7 +95,11 @@ def build_parser() -> argparse.ArgumentParser:
     hardware.add_argument("--gpu-count", type=int, default=1)
     hardware.add_argument("--cpu-count", type=int, default=4, help="Baseten only")
     hardware.add_argument("--memory", default="16Gi", help="Baseten only")
-    hardware.add_argument("--machine-type", default="n1-standard-4", help="Vertex AI only")
+    hardware.add_argument(
+        "--machine-type",
+        default=None,
+        help="Vertex AI only; chosen from the GPU by default",
+    )
     hardware.add_argument("--region", default="us-central1", help="Vertex AI only")
     hardware.add_argument("--container-uri", default=None, help="Override the provider default image")
     hardware.add_argument("--spot", action="store_true", help="Request interruptible capacity")
@@ -77,19 +122,30 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def common_kwargs(args: argparse.Namespace) -> dict:
+    gpu = None if args.gpu.lower() == "none" else args.gpu
+    machine_type = args.machine_type or vertex_machine_type(gpu, args.gpu_count)
+
+    scheduling = "SPOT" if args.spot else "STANDARD"
+    if not args.spot and machine_type.startswith("a3-highgpu"):
+        # Vertex requires FLEX_START for a3-highgpu, so a plain STANDARD
+        # request for an H100 is rejected outright.
+        scheduling = "FLEX_START"
+        if args.provider != "baseten":
+            print(f"Using FLEX_START scheduling, which {machine_type} requires.\n")
+
     return {
         "project_id": args.project_id,
         "bucket": args.bucket,
         "provider": args.provider,
-        "gpu": None if args.gpu.lower() == "none" else args.gpu,
+        "gpu": gpu,
         "accelerator_type": None,
         "gpu_count": args.gpu_count,
         "cpu_count": args.cpu_count,
         "memory": args.memory,
-        "machine_type": args.machine_type,
+        "machine_type": machine_type,
         "region": args.region,
         "container_uri": args.container_uri,
-        "scheduling_strategy": "SPOT" if args.spot else "STANDARD",
+        "scheduling_strategy": scheduling,
         "sync_packages": ["smoke_tasks"],
         "baseten_project": args.baseten_project,
         "gcp_credentials_secret": args.credentials_secret,

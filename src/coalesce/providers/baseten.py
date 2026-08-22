@@ -34,6 +34,9 @@ TASK_RUNNER_REQUIREMENTS = ("google-cloud-storage", "pyyaml")
 # The env var task.py reads its GCP service account key from.
 GCP_CREDENTIALS_ENV = "GCP_SERVICE_ACCOUNT_JSON"
 
+# Registries whose images the GCP service account key can already pull.
+GOOGLE_REGISTRY_SUFFIXES = (".pkg.dev", "gcr.io")
+
 
 class _Remote(NamedTuple):
     """How to reach Baseten: the truss remote name, the key, and the app URL."""
@@ -137,6 +140,46 @@ def _parse_mount(mount: str) -> tuple[str, str]:
             f"Invalid mount {mount!r}; expected 'gs://bucket/path:/container/path'."
         )
     return f"{scheme}://{source_rest}", mount_location
+
+
+def _registry_host(container_uri: str) -> str:
+    return container_uri.split("/", 1)[0]
+
+
+def _docker_auth(job_spec: JobSpec, container_uri: str, td, truss_config):
+    """Credentials for pulling a private image, when the image needs them.
+
+    Baseten has to pull the image itself, so an image in a private registry
+    needs a secret. Images in a Google registry reuse the service account key
+    that already grants the job access to GCS, which means a private
+    Artifact Registry image works with no extra setup beyond granting that
+    account artifactregistry.reader.
+    """
+    host = _registry_host(container_uri)
+    secret = job_spec.container_registry_secret
+    if secret is None:
+        if not host.endswith(GOOGLE_REGISTRY_SUFFIXES):
+            return None
+        secret = job_spec.gcp_credentials_secret
+    if not secret:
+        return None
+
+    print(f"  Image pull: authenticating to {host} with Baseten secret {secret!r}")
+    if host.endswith(GOOGLE_REGISTRY_SUFFIXES):
+        return td.DockerAuth(
+            auth_method=truss_config.DockerAuthType.GCP_SERVICE_ACCOUNT_JSON,
+            registry=host,
+            gcp_service_account_json_docker_auth=td.GCPServiceAccountJSONDockerAuth(
+                service_account_json_secret_ref=td.SecretReference(name=secret)
+            ),
+        )
+    return td.DockerAuth(
+        auth_method=truss_config.DockerAuthType.REGISTRY_SECRET,
+        registry=host,
+        registry_secret_docker_auth=td.RegistrySecretDockerAuth(
+            secret_ref=td.SecretReference(name=secret)
+        ),
+    )
 
 
 def upsert_secret(name: str, value: str) -> dict[str, Any]:
@@ -324,7 +367,10 @@ def build_training_project(job_spec: JobSpec, environment_variables: dict[str, s
 
     training_job = td.TrainingJob(
         name=job_spec.job_name,
-        image=td.Image(base_image=container_uri),
+        image=td.Image(
+            base_image=container_uri,
+            docker_auth=_docker_auth(job_spec, container_uri, td, truss_config),
+        ),
         compute=td.Compute(
             node_count=compute.node_count,
             cpu_count=compute.cpu_count,
@@ -353,6 +399,11 @@ def _print_plan(training_project) -> None:
     job = training_project.job
     print(f"  name: {job.name}")
     print(f"  image: {job.image.base_image}")
+    if job.image.docker_auth:
+        print(
+            f"  image pull auth: {job.image.docker_auth.auth_method.value} "
+            f"for {job.image.docker_auth.registry}"
+        )
     print(f"  compute: {job.compute.model_dump()}")
     print(f"  priority: {job.priority}")
     print("  start_commands:")

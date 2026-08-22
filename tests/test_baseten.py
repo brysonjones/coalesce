@@ -495,3 +495,52 @@ def test_upload_gcp_credentials_stores_the_key_as_a_secret(monkeypatch, tmp_path
     assert posted["headers"]["Authorization"] == "Bearer test-key"
     assert posted["body"]["name"] == "gcp_sa"
     assert json.loads(posted["body"]["value"])["project_id"] == "demo"
+
+
+def test_private_google_images_reuse_the_gcp_credentials_secret(mock_push) -> None:
+    launcher.launch_job(
+        func=sample_task,
+        project_id="demo-project",
+        bucket="gs://demo-bucket",
+        provider="baseten",
+        container_uri="us-docker.pkg.dev/demo-project/images/trainer:latest",
+        sync=False,
+    )
+
+    auth = submitted_job(mock_push).image.docker_auth
+    assert auth.auth_method.value == "GCP_SERVICE_ACCOUNT_JSON"
+    assert auth.registry == "us-docker.pkg.dev"
+    assert (
+        auth.gcp_service_account_json_docker_auth.service_account_json_secret_ref.name
+        == "gcp_service_account_json"
+    )
+
+
+def test_public_images_are_pulled_without_credentials(mock_push) -> None:
+    launcher.launch_job(
+        func=sample_task,
+        project_id="demo-project",
+        bucket="gs://demo-bucket",
+        provider="baseten",
+        container_uri="pytorch/pytorch:2.7.0-cuda12.8-cudnn9-runtime",
+        sync=False,
+    )
+
+    assert submitted_job(mock_push).image.docker_auth is None
+
+
+def test_a_named_secret_pulls_from_any_registry(mock_push) -> None:
+    launcher.launch_job(
+        func=sample_task,
+        project_id="demo-project",
+        bucket="gs://demo-bucket",
+        provider="baseten",
+        container_uri="ghcr.io/acme/trainer:latest",
+        container_registry_secret="ghcr_token",
+        sync=False,
+    )
+
+    auth = submitted_job(mock_push).image.docker_auth
+    assert auth.auth_method.value == "REGISTRY_SECRET"
+    assert auth.registry == "ghcr.io"
+    assert auth.registry_secret_docker_auth.secret_ref.name == "ghcr_token"
