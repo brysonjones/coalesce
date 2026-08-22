@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 """Launch a test job on Vertex AI to validate coalesce setup."""
 
+import os
 import sys
 from pathlib import Path
 
@@ -17,11 +18,14 @@ def main():
 
     job = launch_job(
         func=run_pytorch_test,
-        project_id="my-project",
-        bucket="gs://my-bucket",
+        project_id=os.environ["COALESCE_PROJECT_ID"],
+        bucket=os.environ["COALESCE_BUCKET"],
         region="us-central1",
-        # Use the existing container that has PyTorch installed
-        container_uri="us-docker.pkg.dev/my-project/my-repo/my-image:latest",
+        # Any image with PyTorch; defaults to a Vertex AI prebuilt one
+        container_uri=os.environ.get(
+            "COALESCE_CONTAINER_URI",
+            "us-docker.pkg.dev/vertex-ai/training/pytorch-gpu.2-0:latest",
+        ),
         machine_type="n1-standard-4",
         accelerator_type="NVIDIA_TESLA_T4",
         accelerator_count=1,

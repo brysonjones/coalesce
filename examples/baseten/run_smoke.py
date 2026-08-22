@@ -26,12 +26,14 @@ import smoke_tasks  # noqa: E402
 
 from coalesce import launch_job  # noqa: E402
 
-DEFAULT_PROJECT_ID = os.environ.get("COALESCE_PROJECT_ID", "my-project")
-DEFAULT_BUCKET = os.environ.get("COALESCE_BUCKET", "gs://my-bucket")
+# Configure with COALESCE_PROJECT_ID / COALESCE_BUCKET, or pass --project-id
+# and --bucket. There are deliberately no defaults: pointing a smoke test at
+# someone else's bucket should not be possible by forgetting a flag.
+DEFAULT_PROJECT_ID = os.environ.get("COALESCE_PROJECT_ID")
+DEFAULT_BUCKET = os.environ.get("COALESCE_BUCKET")
 
 # Vertex AI only accepts a GPU on a machine type built for it, so picking one
-# is not optional the way it is on Baseten. Mirrors the profile table in
-# common Vertex GPU and machine-type pairings.
+# is not optional the way it is on Baseten.
 VERTEX_MACHINE_TYPES = {
     ("T4", 1): "n1-standard-4",
     ("T4", 2): "n1-standard-8",
@@ -87,8 +89,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--provider", default="baseten", help="baseten or vertex (default: baseten)")
-    parser.add_argument("--project-id", default=DEFAULT_PROJECT_ID, help="GCP project owning the bucket")
-    parser.add_argument("--bucket", default=DEFAULT_BUCKET, help="GCS bucket used for staging")
+    parser.add_argument(
+        "--project-id",
+        default=DEFAULT_PROJECT_ID,
+        help="GCP project owning the bucket (or set COALESCE_PROJECT_ID)",
+    )
+    parser.add_argument(
+        "--bucket",
+        default=DEFAULT_BUCKET,
+        help="GCS bucket used for staging (or set COALESCE_BUCKET)",
+    )
 
     hardware = parser.add_argument_group("hardware")
     hardware.add_argument("--gpu", default="T4", help="Portable GPU name, or 'none' for CPU-only (default: T4)")
@@ -109,11 +119,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=86400,
         help=(
             "Seconds a FLEX_START job may queue for capacity before expiring "
-            "(default: 24h). Lower it to probe availability rather than wait "
-            "for it -- but note Vertex enforces this loosely: a job with a 900s "
-            "window was observed still PENDING 9 minutes past the deadline, so "
-            "treat it as a hint, not a deadline, and cancel explicitly if you "
-            "need the quota back."
+            "(default: 24h). Vertex treats this as a hint rather than a hard "
+            "deadline, so cancel explicitly if you need the quota back."
         ),
     )
 
@@ -235,6 +242,12 @@ TESTS = {"gpu": run_gpu, "config": run_config, "gcs": run_gcs, "mount": run_moun
 
 def main() -> int:
     args = build_parser().parse_args()
+    if not args.project_id or not args.bucket:
+        raise SystemExit(
+            "Set --project-id and --bucket (or COALESCE_PROJECT_ID and "
+            "COALESCE_BUCKET) to the GCP project and bucket you want to stage "
+            "through."
+        )
     # 'all' deliberately omits mount, which needs a dataset that exists.
     selected = ["gpu", "config", "gcs"] if args.test == "all" else [args.test]
 

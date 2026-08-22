@@ -29,7 +29,11 @@ def main() -> int:
         default="~/coalesce-baseten-key.json",
         help="Service account JSON key, the same one uploaded to Baseten",
     )
-    parser.add_argument("--bucket", default="gs://my-bucket")
+    parser.add_argument(
+        "--bucket",
+        default=os.environ.get("COALESCE_BUCKET"),
+        help="GCS bucket to test against (or set COALESCE_BUCKET)",
+    )
     parser.add_argument("--prefix", default=".coalesce/smoke")
     parser.add_argument(
         "--keep",
@@ -37,6 +41,10 @@ def main() -> int:
         help="Leave the test object in the bucket so you can view it in the console",
     )
     args = parser.parse_args()
+
+    if not args.bucket:
+        print("Set --bucket (or COALESCE_BUCKET) to the bucket you want to test.")
+        return 1
 
     key_file = Path(args.key_file).expanduser()
     if not key_file.exists():

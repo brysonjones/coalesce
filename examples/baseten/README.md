@@ -16,31 +16,30 @@ no ambient GCP identity, so it needs a key of its own.
 
 ```bash
 gcloud iam service-accounts create coalesce-baseten \
-  --project my-project \
+  --project $PROJECT_ID \
   --display-name "coalesce Baseten jobs"
 ```
 
 ```bash
-gcloud storage buckets add-iam-policy-binding gs://my-bucket \
-  --member "serviceAccount:coalesce-baseten@my-project.iam.gserviceaccount.com" \
+gcloud storage buckets add-iam-policy-binding gs://$BUCKET \
+  --member "serviceAccount:coalesce-baseten@$PROJECT_ID.iam.gserviceaccount.com" \
   --role roles/storage.objectAdmin
 ```
 
-If you want Baseten to run one of the private `my-project` images rather
-than a public PyTorch one, the same account also needs to pull from Artifact
-Registry:
+If you want Baseten to run a private image from Artifact Registry rather than
+a public PyTorch one, the same account also needs to pull from it:
 
 ```bash
-gcloud artifacts repositories add-iam-policy-binding my-repo \
-  --project my-project \
+gcloud artifacts repositories add-iam-policy-binding $REPO \
+  --project $PROJECT_ID \
   --location us \
-  --member "serviceAccount:coalesce-baseten@my-project.iam.gserviceaccount.com" \
+  --member "serviceAccount:coalesce-baseten@$PROJECT_ID.iam.gserviceaccount.com" \
   --role roles/artifactregistry.reader
 ```
 
 ```bash
 gcloud iam service-accounts keys create ~/coalesce-baseten-key.json \
-  --iam-account coalesce-baseten@my-project.iam.gserviceaccount.com
+  --iam-account coalesce-baseten@$PROJECT_ID.iam.gserviceaccount.com
 ```
 
 **3. Store the key as a Baseten secret.** It is referenced by name from then
@@ -54,6 +53,19 @@ At runtime coalesce injects it as `GCP_SERVICE_ACCOUNT_JSON`, and the task
 runner turns it into Application Default Credentials before anything touches
 GCS. On Vertex AI the variable is absent and the job's own service account is
 used instead, so the same code path works on both.
+
+## Configuring
+
+The scripts take the project and bucket from the environment, or from
+`--project-id` / `--bucket`. There are no defaults:
+
+```bash
+export COALESCE_PROJECT_ID=your-gcp-project
+```
+
+```bash
+export COALESCE_BUCKET=gs://your-staging-bucket
+```
 
 ## Checking the credential setup on its own
 
@@ -109,7 +121,7 @@ python examples/baseten/run_smoke.py gpu --gpu H100 --stream-logs
 The mount test needs a prefix with at least one object in it:
 
 ```bash
-python examples/baseten/run_smoke.py mount --dataset gs://my-bucket/data
+python examples/baseten/run_smoke.py mount --dataset gs://$BUCKET/some/prefix
 ```
 
 ## Using a private image
@@ -119,36 +131,11 @@ itself and needs credentials. coalesce wires those up automatically for any
 `*.pkg.dev` or `gcr.io` image, reusing the same secret:
 
 ```bash
-python examples/baseten/run_smoke.py gpu --container-uri us-docker.pkg.dev/my-project/my-repo/my-image:latest
+python examples/baseten/run_smoke.py gpu --container-uri us-docker.pkg.dev/$PROJECT_ID/$REPO/$IMAGE:latest
 ```
 
 For a non-Google registry, pass `--container-uri` along with a
 `container_registry_secret` in your own `launch_job` call.
-
-## Probing GPU availability
-
-`--max-wait` bounds how long a FLEX_START job queues, which turns the runner
-into a capacity probe:
-
-```bash
-python examples/baseten/run_smoke.py gpu --provider vertex --gpu H100 --gpu-count 4 --max-wait 900
-```
-
-Two things learned the hard way running this against `my-project`:
-
-- Vertex enforces `maxWaitDuration` loosely. A job submitted with a 900s window
-  was still `PENDING` 9 minutes past its deadline. Cancel explicitly with
-  `gcloud ai custom-jobs cancel` if you need the quota back.
-- Killing the local process does **not** cancel the job. The client only streams
-  logs; the job keeps its place in the Vertex queue and keeps holding quota.
-
-On-demand H100 quota is small and single-region, while preemptible quota is
-several times larger and spans more regions, so `--spot` is far more likely to
-schedule. Check yours before assuming a stockout is capacity rather than quota:
-
-```bash
-gcloud alpha services quota list --service=aiplatform.googleapis.com --consumer=projects/my-project --filter="metric:h100"
-```
 
 ## Comparing providers
 
