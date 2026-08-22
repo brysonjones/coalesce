@@ -55,6 +55,34 @@ runner turns it into Application Default Credentials before anything touches
 GCS. On Vertex AI the variable is absent and the job's own service account is
 used instead, so the same code path works on both.
 
+## Checking the credential setup on its own
+
+Before launching anything, confirm the key you uploaded can actually reach the
+bucket. This walks the same path a Baseten container takes -- key in via
+`GCP_SERVICE_ACCOUNT_JSON`, turned into ADC by the task runner, then a full
+write/read/list/delete cycle -- and touches no Baseten API, so it tells you
+which half of the setup is at fault when a job fails:
+
+```bash
+python examples/baseten/verify_gcs_credentials.py --keep
+```
+
+It clears any ambient ADC first and refuses to run unless the credentials are
+a service account, so a pass cannot be your own gcloud login in disguise.
+
+## Requirements on the Baseten side
+
+Baseten Training has to be enabled for your workspace. If it is not, job
+submission fails with:
+
+```
+403 PERMISSION_DENIED: You are not authorized for Baseten training.
+```
+
+`GET /v1/training/capacity` returning empty `gpu_capacities` is the same signal.
+Everything else -- the API key, secrets, the GCS credential -- can be set up and
+verified before that access lands.
+
 ## Running
 
 Start with a dry run. It resolves the whole job and prints what would be
