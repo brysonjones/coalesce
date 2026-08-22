@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 """Launch a test job on Vertex AI with YAML config."""
 
+import os
 import sys
 from pathlib import Path
 
@@ -20,10 +21,13 @@ def main():
 
     job = launch_job(
         func=run_pytorch_test_with_config,
-        project_id="adjoint-app",
-        bucket="gs://adjoint_exp_usc1",
+        project_id=os.environ["COALESCE_PROJECT_ID"],
+        bucket=os.environ["COALESCE_BUCKET"],
         region="us-central1",
-        container_uri="us-docker.pkg.dev/adjoint-app/experiment-images/representation-learning-research:v1",
+        container_uri=os.environ.get(
+            "COALESCE_CONTAINER_URI",
+            "us-docker.pkg.dev/vertex-ai/training/pytorch-gpu.2-0:latest",
+        ),
         machine_type="n1-standard-4",
         accelerator_type="NVIDIA_TESLA_T4",
         accelerator_count=1,

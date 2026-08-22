@@ -1,0 +1,6 @@
+# Config for the training_step smoke test. Staged to GCS and downloaded by the
+# remote task runner, which is the path a real training config would take.
+learning_rate: 0.01
+batch_size: 32
+num_iterations: 5
+message: "Hello from a YAML config staged through GCS"

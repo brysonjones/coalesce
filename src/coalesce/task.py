@@ -1,9 +1,12 @@
 #!/usr/bin/env python
-"""Generic entry point for Vertex AI jobs.
+"""Generic entry point for coalesce jobs.
 
-This script is uploaded to Vertex AI and runs as the entry point.
 It downloads synced packages from GCS, then imports and calls the
 specified function via environment variables.
+
+This script is uploaded to the remote machine and runs as the entry point on
+every provider -- Vertex AI and Baseten alike -- so that a job behaves the same
+wherever it lands.
 
 Environment variables:
     SYNC_PACKAGES_GCS_URI: GCS URI of the workspace.zip containing synced packages
@@ -11,8 +14,12 @@ Environment variables:
     TASK_FUNCTION: Name of the function to call
     TASK_CONFIG_JSON: JSON-serialized config dict (optional)
     TASK_CONFIG_GCS_URI: GCS URI of config file to download (optional)
+    GCP_SERVICE_ACCOUNT_JSON: GCP service account key, as JSON or base64 (optional).
+        Only needed off GCP, where there is no ambient service account to fall
+        back on.
 """
 
+import base64
 import importlib
 import json
 import os
@@ -23,6 +30,46 @@ from pathlib import Path
 
 import yaml
 from google.cloud import storage
+
+
+def setup_gcp_credentials():
+    """Make GCS reachable when the host has no GCP identity of its own.
+
+    On Vertex AI the job already runs as a service account and Application
+    Default Credentials just work, so this does nothing. On Baseten (or any
+    other non-GCP host) the service account key arrives as a secret-backed
+    environment variable and has to be written to disk before any GCS client is
+    constructed.
+    """
+    if os.environ.get("GOOGLE_APPLICATION_CREDENTIALS"):
+        return
+
+    raw = os.environ.get("GCP_SERVICE_ACCOUNT_JSON", "").strip()
+    if not raw:
+        return
+
+    if not raw.startswith("{"):
+        # Tolerate base64, which survives copy/paste into a secret store better
+        # than raw JSON does.
+        raw = base64.b64decode(raw).decode("utf-8")
+
+    try:
+        credentials = json.loads(raw)
+    except json.JSONDecodeError as e:
+        print(f"Error: GCP_SERVICE_ACCOUNT_JSON is not valid JSON: {e}")
+        sys.exit(1)
+
+    creds_path = Path(tempfile.gettempdir()) / "coalesce_gcp_credentials.json"
+    creds_path.write_text(raw)
+    creds_path.chmod(0o600)
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = str(creds_path)
+
+    project = credentials.get("project_id")
+    if project:
+        os.environ.setdefault("GOOGLE_CLOUD_PROJECT", project)
+
+    account = credentials.get("client_email", "unknown")
+    print(f"Configured GCP credentials: {account} (project={project})")
 
 
 def setup_pythonpath():
@@ -162,6 +209,9 @@ def main():
     print("=" * 60)
     print("coalesce task runner")
     print("=" * 60)
+
+    # Credentials first: everything below this reads from GCS.
+    setup_gcp_credentials()
 
     # Setup synced packages
     setup_synced_packages()
