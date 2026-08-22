@@ -125,6 +125,31 @@ python examples/baseten/run_smoke.py gpu --container-uri us-docker.pkg.dev/my-pr
 For a non-Google registry, pass `--container-uri` along with a
 `container_registry_secret` in your own `launch_job` call.
 
+## Probing GPU availability
+
+`--max-wait` bounds how long a FLEX_START job queues, which turns the runner
+into a capacity probe:
+
+```bash
+python examples/baseten/run_smoke.py gpu --provider vertex --gpu H100 --gpu-count 4 --max-wait 900
+```
+
+Two things learned the hard way running this against `my-project`:
+
+- Vertex enforces `maxWaitDuration` loosely. A job submitted with a 900s window
+  was still `PENDING` 9 minutes past its deadline. Cancel explicitly with
+  `gcloud ai custom-jobs cancel` if you need the quota back.
+- Killing the local process does **not** cancel the job. The client only streams
+  logs; the job keeps its place in the Vertex queue and keeps holding quota.
+
+On-demand H100 quota is small and single-region, while preemptible quota is
+several times larger and spans more regions, so `--spot` is far more likely to
+schedule. Check yours before assuming a stockout is capacity rather than quota:
+
+```bash
+gcloud alpha services quota list --service=aiplatform.googleapis.com --consumer=projects/my-project --filter="metric:h100"
+```
+
 ## Comparing providers
 
 The point of the abstraction is that this produces the same remote behaviour:

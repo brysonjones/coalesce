@@ -109,8 +109,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=86400,
         help=(
             "Seconds a FLEX_START job may queue for capacity before expiring "
-            "(default: 24h). Lower it to a few minutes to probe availability "
-            "rather than wait for it."
+            "(default: 24h). Lower it to probe availability rather than wait "
+            "for it -- but note Vertex enforces this loosely: a job with a 900s "
+            "window was observed still PENDING 9 minutes past the deadline, so "
+            "treat it as a hint, not a deadline, and cancel explicitly if you "
+            "need the quota back."
         ),
     )
 
