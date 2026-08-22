@@ -103,6 +103,16 @@ def build_parser() -> argparse.ArgumentParser:
     hardware.add_argument("--region", default="us-central1", help="Vertex AI only")
     hardware.add_argument("--container-uri", default=None, help="Override the provider default image")
     hardware.add_argument("--spot", action="store_true", help="Request interruptible capacity")
+    hardware.add_argument(
+        "--max-wait",
+        type=int,
+        default=86400,
+        help=(
+            "Seconds a FLEX_START job may queue for capacity before expiring "
+            "(default: 24h). Lower it to a few minutes to probe availability "
+            "rather than wait for it."
+        ),
+    )
 
     mount = parser.add_argument_group("mount test")
     mount.add_argument("--dataset", default=None, help="gs:// prefix to mount, e.g. gs://bucket/datasets/demo")
@@ -146,6 +156,7 @@ def common_kwargs(args: argparse.Namespace) -> dict:
         "region": args.region,
         "container_uri": args.container_uri,
         "scheduling_strategy": scheduling,
+        "max_wait_duration": args.max_wait,
         "sync_packages": ["smoke_tasks"],
         "baseten_project": args.baseten_project,
         "gcp_credentials_secret": args.credentials_secret,
