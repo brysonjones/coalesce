@@ -143,7 +143,14 @@ def common_kwargs(args: argparse.Namespace) -> dict:
         if args.provider != "baseten":
             print(f"Using FLEX_START scheduling, which {machine_type} requires.\n")
 
+    # Auto-generated names are second-resolution, so a parallel sweep produces
+    # several jobs with the same name. Tag each with what it is actually testing.
+    tag = f"{gpu.lower()}x{args.gpu_count}" if gpu else "cpu"
+    if args.spot:
+        tag += "-spot"
+
     return {
+        "job_name_suffix": tag,
         "project_id": args.project_id,
         "bucket": args.bucket,
         "provider": args.provider,
@@ -166,26 +173,40 @@ def common_kwargs(args: argparse.Namespace) -> dict:
     }
 
 
+def _with_job_name(func, kwargs: dict) -> dict:
+    """Give the job a name that says what it is testing."""
+    from datetime import datetime
+
+    kwargs = dict(kwargs)
+    suffix = kwargs.pop("job_name_suffix", None)
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    kwargs["job_name"] = f"{func.__name__}_{suffix}_{stamp}" if suffix else None
+    return kwargs
+
+
 def run_gpu(args: argparse.Namespace):
     """Prove the job landed on a working GPU."""
-    return launch_job(func=smoke_tasks.gpu_check, **common_kwargs(args))
+    func = smoke_tasks.gpu_check
+    return launch_job(func=func, **_with_job_name(func, common_kwargs(args)))
 
 
 def run_config(args: argparse.Namespace):
     """Prove a YAML config staged through GCS reaches the remote function."""
+    func = smoke_tasks.training_step
     return launch_job(
-        func=smoke_tasks.training_step,
+        func=func,
         config=HERE / "config.yaml",
-        **common_kwargs(args),
+        **_with_job_name(func, common_kwargs(args)),
     )
 
 
 def run_gcs(args: argparse.Namespace):
     """Prove the job can read and write the GCS bucket."""
+    func = smoke_tasks.gcs_roundtrip
     return launch_job(
-        func=smoke_tasks.gcs_roundtrip,
+        func=func,
         config={"bucket": args.bucket, "prefix": ".coalesce/smoke"},
-        **common_kwargs(args),
+        **_with_job_name(func, common_kwargs(args)),
     )
 
 
@@ -196,10 +217,11 @@ def run_mount(args: argparse.Namespace):
             "The mount test needs --dataset gs://bucket/prefix pointing at a "
             "prefix with at least one object in it."
         )
-    kwargs = common_kwargs(args)
+    func = smoke_tasks.mounted_dataset_check
+    kwargs = _with_job_name(func, common_kwargs(args))
     kwargs["mount_datasets"] = [f"{args.dataset}:{args.mount_path}"]
     return launch_job(
-        func=smoke_tasks.mounted_dataset_check,
+        func=func,
         config={"mount_path": args.mount_path},
         **kwargs,
     )
