@@ -165,8 +165,31 @@ def _accelerator_type(compute) -> str | None:
     return None
 
 
-def launch(job_spec: JobSpec) -> Job:
-    """Submit ``job_spec`` as a Vertex AI custom job."""
+def _print_plan(
+    job_spec: JobSpec,
+    job_kwargs: dict[str, Any],
+    staging_bucket_uri: str,
+    environment_variables: dict[str, str],
+) -> None:
+    print("\n--- dry run: Vertex AI CustomJob that would be submitted ---")
+    print(f"  project: {job_spec.gcp_project_id}")
+    print(f"  staging bucket: {staging_bucket_uri}")
+    for key in sorted(job_kwargs):
+        if key == "environment_variables":
+            continue
+        print(f"  {key}: {job_kwargs[key]}")
+    print("  environment_variables:")
+    for key in sorted(environment_variables):
+        print(f"    {key}={environment_variables[key]}")
+    print("--- nothing was submitted and nothing was uploaded ---\n")
+
+
+def launch(job_spec: JobSpec) -> Job | None:
+    """Submit ``job_spec`` as a Vertex AI custom job.
+
+    Returns ``None`` on a dry run, which prints the plan instead of creating
+    anything.
+    """
     compute = job_spec.compute
     _, _, staging_bucket_uri = staging.staging_paths(job_spec)
     container_uri = job_spec.container_uri or DEFAULT_CONTAINER_URI
@@ -181,11 +204,12 @@ def launch(job_spec: JobSpec) -> Job:
     else:
         print("  GPU: None (CPU-only)")
 
-    aiplatform.init(
-        project=job_spec.gcp_project_id,
-        location=job_spec.region,
-        staging_bucket=staging_bucket_uri,
-    )
+    if not job_spec.dry_run:
+        aiplatform.init(
+            project=job_spec.gcp_project_id,
+            location=job_spec.region,
+            staging_bucket=staging_bucket_uri,
+        )
 
     environment_variables = staging.build_environment(job_spec)
     task_py_dest = staging.stage_task_runner()
@@ -207,6 +231,10 @@ def launch(job_spec: JobSpec) -> Job:
     if accelerator_type:
         job_kwargs["accelerator_type"] = accelerator_type
         job_kwargs["accelerator_count"] = compute.gpu_count
+
+    if job_spec.dry_run:
+        _print_plan(job_spec, job_kwargs, staging_bucket_uri, environment_variables)
+        return None
 
     job = aiplatform.CustomJob.from_local_script(**job_kwargs)
 

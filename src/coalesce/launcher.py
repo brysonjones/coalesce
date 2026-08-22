@@ -72,6 +72,7 @@ def launch_job(
     sync_packages: list[str] | None = None,
     job_name: str | None = None,
     sync: bool = True,
+    dry_run: bool = False,
     config: str | Path | dict[str, Any] | None = None,
     extra_packages: list[str] | None = None,
     env: dict[str, str] | None = None,
@@ -86,7 +87,7 @@ def launch_job(
     gcp_credentials_secret: str = "gcp_service_account_json",
     mount_datasets: list[str] | None = None,
     checkpoint_volume_gb: int | None = None,
-) -> Job:
+) -> Job | None:
     """
     Launch a Python function on cloud compute.
 
@@ -125,6 +126,9 @@ def launch_job(
                       extracted on the remote machine before running the function.
         job_name: Custom job name (auto-generated if None)
         sync: If True, wait for job completion. If False, return immediately.
+        dry_run: If True, print the fully resolved job the provider would
+                 receive and return None. Nothing is submitted and nothing
+                 is uploaded, so this is safe to run against any bucket.
         config: Configuration to pass to the function. Can be:
                 - Path to a YAML/JSON file (will be uploaded to GCS)
                 - Dict (will be serialized to JSON and passed via env var)
@@ -159,8 +163,8 @@ def launch_job(
                               as $BT_CHECKPOINT_DIR.
 
     Returns:
-        A :class:`~coalesce.job.Job` handle. The provider's native object is
-        available as ``job.raw``.
+        A :class:`~coalesce.job.Job` handle, or ``None`` when ``dry_run`` is set.
+        The provider's native object is available as ``job.raw``.
 
     Example:
         def my_training_function(config: dict):
@@ -221,6 +225,7 @@ def launch_job(
         env=dict(env or {}),
         staging_prefix=staging_prefix,
         sync=sync,
+        dry_run=dry_run,
         stream_logs=stream_logs,
         log_polling_interval=log_polling_interval,
         allow_multiline_logs=allow_multiline_logs,

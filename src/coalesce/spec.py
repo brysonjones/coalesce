@@ -166,6 +166,7 @@ class JobSpec:
     env: dict[str, str] = field(default_factory=dict)
     staging_prefix: str = ".coalesce/tmp"
     sync: bool = True
+    dry_run: bool = False
     stream_logs: bool = False
     log_polling_interval: int = 10
     allow_multiline_logs: bool = True

@@ -35,7 +35,8 @@ def build_environment(spec: JobSpec) -> dict[str, str]:
 
     This is the side-effecting half of a launch: by the time it returns, the
     config file and any synced packages are in the bucket and the returned
-    mapping tells ``task.py`` where to find them.
+    mapping tells ``task.py`` where to find them. On a dry run the uploads are
+    described rather than performed, so nothing is written anywhere.
     """
     bucket_name, staging_root_prefix, _ = staging_paths(spec)
 
@@ -55,25 +56,39 @@ def build_environment(spec: JobSpec) -> dict[str, str]:
         elif isinstance(spec.config, (str, Path)):
             config_path = Path(spec.config)
             print(f"  Config: {config_path.name}")
-            environment_variables["TASK_CONFIG_GCS_URI"] = storage.upload_config(
-                config_path=config_path,
-                bucket_name=bucket_name,
-                project_id=spec.gcp_project_id,
-                prefix=storage.join_parts(staging_root_prefix, "configs"),
-            )
+            config_prefix = storage.join_parts(staging_root_prefix, "configs")
+            if spec.dry_run:
+                environment_variables["TASK_CONFIG_GCS_URI"] = (
+                    f"<would upload {config_path.name} to "
+                    f"gs://{bucket_name}/{config_prefix}/>"
+                )
+            else:
+                environment_variables["TASK_CONFIG_GCS_URI"] = storage.upload_config(
+                    config_path=config_path,
+                    bucket_name=bucket_name,
+                    project_id=spec.gcp_project_id,
+                    prefix=config_prefix,
+                )
         else:
             raise TypeError(
                 f"config must be dict, str, or Path, got {type(spec.config)}"
             )
 
     if spec.sync_packages:
-        print(f"Packaging {len(spec.sync_packages)} package(s) for sync...")
-        environment_variables["SYNC_PACKAGES_GCS_URI"] = package_and_upload(
-            package_names=spec.sync_packages,
-            bucket_name=bucket_name,
-            project_id=spec.gcp_project_id,
-            prefix=storage.join_parts(staging_root_prefix, "source"),
-        )
+        source_prefix = storage.join_parts(staging_root_prefix, "source")
+        if spec.dry_run:
+            environment_variables["SYNC_PACKAGES_GCS_URI"] = (
+                f"<would upload {', '.join(spec.sync_packages)} to "
+                f"gs://{bucket_name}/{source_prefix}/>"
+            )
+        else:
+            print(f"Packaging {len(spec.sync_packages)} package(s) for sync...")
+            environment_variables["SYNC_PACKAGES_GCS_URI"] = package_and_upload(
+                package_names=spec.sync_packages,
+                bucket_name=bucket_name,
+                project_id=spec.gcp_project_id,
+                prefix=source_prefix,
+            )
 
     return environment_variables
 

@@ -116,7 +116,7 @@ def upload_gcp_credentials(
     bucket. The key never enters a config file or the job definition -- it is
     referenced by name and injected at runtime.
     """
-    payload = Path(key_file).read_text()
+    payload = Path(key_file).expanduser().read_text()
     result = upsert_secret(secret_name, payload)
     print(f"Stored GCP credentials as Baseten secret: {secret_name}")
     return result
@@ -286,8 +286,38 @@ def build_training_project(job_spec: JobSpec, environment_variables: dict[str, s
     )
 
 
-def launch(job_spec: JobSpec) -> Job:
-    """Submit ``job_spec`` as a Baseten training job."""
+def _print_plan(training_project) -> None:
+    print("\n--- dry run: Baseten training job that would be submitted ---")
+    print(f"  project: {training_project.name}")
+    job = training_project.job
+    print(f"  name: {job.name}")
+    print(f"  image: {job.image.base_image}")
+    print(f"  compute: {job.compute.model_dump()}")
+    print(f"  priority: {job.priority}")
+    print("  start_commands:")
+    for command in job.runtime.start_commands:
+        print(f"    $ {command}")
+    print("  environment_variables:")
+    for key in sorted(job.runtime.environment_variables):
+        value = job.runtime.environment_variables[key]
+        rendered = (
+            f"<baseten secret {value.name!r}>" if hasattr(value, "name") else value
+        )
+        print(f"    {key}={rendered}")
+    print(f"  checkpointing: {job.runtime.checkpointing_config.model_dump()}")
+    if job.weights:
+        print("  mounts:")
+        for weight in job.weights:
+            print(f"    {weight.source} -> {weight.mount_location}")
+    print("--- nothing was submitted and nothing was uploaded ---\n")
+
+
+def launch(job_spec: JobSpec) -> Job | None:
+    """Submit ``job_spec`` as a Baseten training job.
+
+    Returns ``None`` on a dry run, which prints the plan instead of creating
+    anything.
+    """
     from truss_train import push
 
     compute = job_spec.compute
@@ -319,13 +349,18 @@ def launch(job_spec: JobSpec) -> Job:
     else:
         print("  Scheduling: STANDARD (dedicated)")
 
-    _ensure_truss_env()
+    if not job_spec.dry_run:
+        _ensure_truss_env()
 
     environment_variables = staging.build_environment(job_spec)
     source_dir = Path(tempfile.mkdtemp(prefix="coalesce_baseten_"))
     staging.stage_task_runner(source_dir)
 
     training_project = build_training_project(job_spec, environment_variables)
+
+    if job_spec.dry_run:
+        _print_plan(training_project)
+        return None
 
     print("Submitting job...")
     response = push(training_project, source_dir=source_dir)
@@ -365,3 +400,25 @@ def _report_failure(backend: BasetenJobBackend, state: str) -> None:
         print(f"Job did not complete ({state}): {message}")
     else:
         print(f"Job did not complete ({state}).")
+
+
+def _main() -> None:
+    """One-time setup: `python -m coalesce.providers.baseten key.json`."""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Store a GCP service account key as a Baseten secret so "
+        "Baseten jobs can read and write your GCS bucket."
+    )
+    parser.add_argument("key_file", help="Path to the service account JSON key")
+    parser.add_argument(
+        "--secret-name",
+        default="gcp_service_account_json",
+        help="Baseten secret name (default: gcp_service_account_json)",
+    )
+    args = parser.parse_args()
+    upload_gcp_credentials(args.key_file, secret_name=args.secret_name)
+
+
+if __name__ == "__main__":
+    _main()
