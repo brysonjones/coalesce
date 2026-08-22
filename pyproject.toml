@@ -10,12 +10,19 @@ dependencies = [
     "google-cloud-storage",
     "setuptools",
     "pyyaml",
+    "requests",
+]
+
+[project.optional-dependencies]
+baseten = [
+    "truss>=0.18",
 ]
 
 [dependency-groups]
 dev = [
     "pytest",
     "ipython",
+    "truss>=0.18",
 ]
 
 [build-system]

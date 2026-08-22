@@ -20,10 +20,10 @@ def main():
 
     job = launch_job(
         func=run_pytorch_test_with_config,
-        project_id="adjoint-app",
-        bucket="gs://adjoint_exp_usc1",
+        project_id="my-project",
+        bucket="gs://my-bucket",
         region="us-central1",
-        container_uri="us-docker.pkg.dev/adjoint-app/experiment-images/representation-learning-research:v1",
+        container_uri="us-docker.pkg.dev/my-project/my-repo/my-image:latest",
         machine_type="n1-standard-4",
         accelerator_type="NVIDIA_TESLA_T4",
         accelerator_count=1,
