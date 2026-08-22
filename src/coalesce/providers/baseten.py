@@ -249,10 +249,27 @@ class BasetenJobBackend(JobBackend):
         print(f"Requested stop for Baseten training job {self.job_id}")
 
 
+def _import_truss():
+    """Import truss, or explain how to install it.
+
+    truss is an optional dependency so that using Vertex AI never requires it;
+    the raw ModuleNotFoundError does not say that.
+    """
+    try:
+        from truss.base import truss_config
+        from truss_train import definitions as td
+        from truss_train import push
+    except ImportError as exc:
+        raise ImportError(
+            "The Baseten provider needs truss, which is not installed. "
+            "Install it with `pip install 'coalesce[baseten]'`."
+        ) from exc
+    return truss_config, td, push
+
+
 def build_training_project(job_spec: JobSpec, environment_variables: dict[str, str]):
     """Translate a :class:`JobSpec` into Baseten's training definitions."""
-    from truss.base import truss_config
-    from truss_train import definitions as td
+    truss_config, td, _ = _import_truss()
 
     compute = job_spec.compute
     container_uri = job_spec.container_uri or DEFAULT_CONTAINER_URI
@@ -362,7 +379,7 @@ def launch(job_spec: JobSpec) -> Job | None:
     Returns ``None`` on a dry run, which prints the plan instead of creating
     anything.
     """
-    from truss_train import push
+    _, _, push = _import_truss()
 
     compute = job_spec.compute
 
