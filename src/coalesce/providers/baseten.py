@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, NamedTuple
 
 import requests
 
@@ -35,21 +35,81 @@ TASK_RUNNER_REQUIREMENTS = ("google-cloud-storage", "pyyaml")
 GCP_CREDENTIALS_ENV = "GCP_SERVICE_ACCOUNT_JSON"
 
 
-def resolve_api_key() -> str:
-    """Find the Baseten API key, preferring the truss-specific variable."""
-    api_key = os.environ.get("BASETEN_TRUSS_AUTH_API_KEY") or os.environ.get(
-        "BASETEN_API_KEY"
-    )
+class _Remote(NamedTuple):
+    """How to reach Baseten: the truss remote name, the key, and the app URL."""
+
+    name: str
+    api_key: str
+    app_url: str
+
+
+def _env_remote_name() -> str:
+    """The literal remote name truss uses for env-supplied credentials."""
+    try:
+        from truss.remote.remote_factory import ENV_REMOTE_NAME
+
+        return ENV_REMOTE_NAME
+    except ImportError:
+        return "<environment>"
+
+
+def _remote_from_trussrc() -> _Remote | None:
+    """Credentials from a previous ``truss login``, if there are any."""
+    try:
+        from truss.remote.remote_factory import RemoteFactory
+
+        configs = RemoteFactory.load_remote_config("baseten").configs
+    except Exception:
+        return None
+
+    api_key = configs.get("api_key")
     if not api_key:
-        raise RuntimeError(
-            "No Baseten API key found. Set BASETEN_API_KEY (or "
-            "BASETEN_TRUSS_AUTH_API_KEY) in your environment."
-        )
-    return api_key
+        return None
+    app_url = str(configs.get("remote_url") or DEFAULT_APP_URL).rstrip("/")
+    return _Remote(name="baseten", api_key=str(api_key), app_url=app_url)
+
+
+def resolve_remote() -> _Remote:
+    """Work out how to authenticate, and under which truss remote name.
+
+    truss takes credentials either from the BASETEN_TRUSS_AUTH_* pair or from
+    ``~/.trussrc``, and the two are mutually exclusive: once the pair is set,
+    the *only* remote name truss will accept is its env remote, and passing
+    "baseten" is an error. coalesce also calls the REST API directly, so it
+    needs the key itself either way.
+
+    A plain BASETEN_API_KEY is the common case; the pair is derived from it so
+    that no interactive ``truss login`` is required.
+    """
+    env_key = os.environ.get("BASETEN_TRUSS_AUTH_API_KEY")
+    env_url = os.environ.get("BASETEN_TRUSS_AUTH_REMOTE_URL")
+    if env_key and env_url:
+        return _Remote(_env_remote_name(), env_key, env_url.rstrip("/"))
+
+    api_key = os.environ.get("BASETEN_API_KEY")
+    if api_key:
+        app_url = (env_url or DEFAULT_APP_URL).rstrip("/")
+        os.environ["BASETEN_TRUSS_AUTH_API_KEY"] = api_key
+        os.environ["BASETEN_TRUSS_AUTH_REMOTE_URL"] = app_url
+        return _Remote(_env_remote_name(), api_key, app_url)
+
+    from_trussrc = _remote_from_trussrc()
+    if from_trussrc:
+        return from_trussrc
+
+    raise RuntimeError(
+        "No Baseten API key found. Set BASETEN_API_KEY in your environment, or "
+        "run `truss login`."
+    )
+
+
+def resolve_api_key() -> str:
+    """The Baseten API key coalesce should authenticate REST calls with."""
+    return resolve_remote().api_key
 
 
 def _app_url() -> str:
-    return os.environ.get("BASETEN_TRUSS_AUTH_REMOTE_URL", DEFAULT_APP_URL).rstrip("/")
+    return resolve_remote().app_url
 
 
 def _api_url() -> str:
@@ -58,22 +118,6 @@ def _api_url() -> str:
     if app_url == DEFAULT_APP_URL:
         return DEFAULT_API_URL
     return app_url.replace("://app.", "://api.", 1)
-
-
-def _ensure_truss_env() -> None:
-    """Let ``truss`` authenticate from BASETEN_API_KEY alone.
-
-    truss reads either ``~/.trussrc`` or the pair of BASETEN_TRUSS_AUTH_*
-    variables. Deriving the pair from BASETEN_API_KEY means a shell that only
-    exports the plain key still works, with no interactive ``truss login``.
-    """
-    if os.environ.get("BASETEN_TRUSS_AUTH_API_KEY") and os.environ.get(
-        "BASETEN_TRUSS_AUTH_REMOTE_URL"
-    ):
-        return
-    api_key = resolve_api_key()
-    os.environ["BASETEN_TRUSS_AUTH_API_KEY"] = api_key
-    os.environ.setdefault("BASETEN_TRUSS_AUTH_REMOTE_URL", DEFAULT_APP_URL)
 
 
 def _auth_headers() -> dict[str, str]:
@@ -349,8 +393,7 @@ def launch(job_spec: JobSpec) -> Job | None:
     else:
         print("  Scheduling: STANDARD (dedicated)")
 
-    if not job_spec.dry_run:
-        _ensure_truss_env()
+    remote = None if job_spec.dry_run else resolve_remote()
 
     environment_variables = staging.build_environment(job_spec)
     source_dir = Path(tempfile.mkdtemp(prefix="coalesce_baseten_"))
@@ -363,7 +406,7 @@ def launch(job_spec: JobSpec) -> Job | None:
         return None
 
     print("Submitting job...")
-    response = push(training_project, source_dir=source_dir)
+    response = push(training_project, source_dir=source_dir, remote=remote.name)
 
     job_id = response["id"]
     project_id = response["training_project"]["id"]

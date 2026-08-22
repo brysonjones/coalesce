@@ -330,8 +330,49 @@ def test_truss_auth_is_derived_from_baseten_api_key(mock_push) -> None:
     assert os.environ["BASETEN_TRUSS_AUTH_REMOTE_URL"] == "https://app.baseten.co"
 
 
+def test_push_targets_the_env_remote_when_credentials_come_from_the_environment(
+    mock_push,
+) -> None:
+    launcher.launch_job(
+        func=sample_task,
+        project_id="demo-project",
+        bucket="gs://demo-bucket",
+        provider="baseten",
+        sync=False,
+    )
+
+    # Once BASETEN_TRUSS_AUTH_* are set, truss rejects the name "baseten" and
+    # only accepts its env remote, so the two have to stay in step.
+    from truss.remote.remote_factory import ENV_REMOTE_NAME
+
+    assert mock_push.call_args.kwargs["remote"] == ENV_REMOTE_NAME
+
+
+def test_a_previous_truss_login_is_used_when_no_env_key_is_set(
+    monkeypatch, mock_push
+) -> None:
+    monkeypatch.delenv("BASETEN_API_KEY", raising=False)
+    monkeypatch.setattr(
+        baseten,
+        "_remote_from_trussrc",
+        lambda: baseten._Remote("baseten", "trussrc-key", "https://app.baseten.co"),
+    )
+
+    launcher.launch_job(
+        func=sample_task,
+        project_id="demo-project",
+        bucket="gs://demo-bucket",
+        provider="baseten",
+        sync=False,
+    )
+
+    assert mock_push.call_args.kwargs["remote"] == "baseten"
+    assert baseten.resolve_api_key() == "trussrc-key"
+
+
 def test_missing_api_key_is_a_clear_error(monkeypatch, mock_push) -> None:
     monkeypatch.delenv("BASETEN_API_KEY", raising=False)
+    monkeypatch.setattr(baseten, "_remote_from_trussrc", lambda: None)
 
     with pytest.raises(RuntimeError, match="No Baseten API key found"):
         launcher.launch_job(
