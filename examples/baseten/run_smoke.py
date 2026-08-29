@@ -32,6 +32,11 @@ from coalesce import launch_job  # noqa: E402
 DEFAULT_PROJECT_ID = os.environ.get("COALESCE_PROJECT_ID")
 DEFAULT_BUCKET = os.environ.get("COALESCE_BUCKET")
 
+# The smallest GPU each provider will actually schedule. Baseten training
+# rejects T4 outright ("Use H100 or A10G for training"), even though T4 appears
+# in the inference instance-type catalogue.
+DEFAULT_GPU = {"vertex": "T4", "baseten": "A10G"}
+
 # Vertex AI only accepts a GPU on a machine type built for it, so picking one
 # is not optional the way it is on Baseten.
 VERTEX_MACHINE_TYPES = {
@@ -101,7 +106,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     hardware = parser.add_argument_group("hardware")
-    hardware.add_argument("--gpu", default="T4", help="Portable GPU name, or 'none' for CPU-only (default: T4)")
+    hardware.add_argument(
+        "--gpu",
+        default=None,
+        help=(
+            "Portable GPU name, or 'none' for CPU-only. Defaults to the "
+            "cheapest GPU the provider offers: T4 on Vertex, A10G on Baseten "
+            "(Baseten training accepts a narrower set than its inference "
+            "catalogue, and T4 is not in it)."
+        ),
+    )
     hardware.add_argument("--gpu-count", type=int, default=1)
     hardware.add_argument("--cpu-count", type=int, default=4, help="Baseten only")
     hardware.add_argument("--memory", default="16Gi", help="Baseten only")
@@ -142,8 +156,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def common_kwargs(args: argparse.Namespace) -> dict:
-    gpu = None if args.gpu.lower() == "none" else args.gpu
-    machine_type = args.machine_type or vertex_machine_type(gpu, args.gpu_count)
+    gpu = args.gpu or DEFAULT_GPU.get(args.provider, "T4")
+    gpu = None if gpu.lower() == "none" else gpu
+    if args.provider == "vertex":
+        machine_type = args.machine_type or vertex_machine_type(gpu, args.gpu_count)
+    else:
+        # Baseten asks for vCPU and memory directly, so the machine type is
+        # never sent. Do not fail here on a GPU that Vertex has no shape for.
+        machine_type = args.machine_type or "n1-standard-4"
 
     scheduling = "SPOT" if args.spot else "STANDARD"
     if not args.spot and machine_type.startswith("a3-highgpu"):

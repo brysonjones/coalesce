@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, ClassVar, NamedTuple
 
@@ -393,6 +394,39 @@ def build_training_project(job_spec: JobSpec, environment_variables: dict[str, s
     )
 
 
+# Baseten creates the training project as a side effect of the first push into
+# it. Concurrent launches therefore all see the project missing and all try to
+# create it, and every loser gets this error even though the project it wanted
+# now exists. Retrying resolves it, because the retry finds the winner's project.
+_PROJECT_RACE_MARKER = "training project name uniqueness"
+
+
+def _is_project_race(exc: Exception) -> bool:
+    """True when a push failed only because a concurrent push created the project."""
+    response = getattr(exc, "response", None)
+    body = ""
+    if response is not None:
+        try:
+            body = response.text or ""
+        except Exception:  # noqa: BLE001 - a body we cannot read is not a race
+            body = ""
+    return _PROJECT_RACE_MARKER in f"{exc} {body}".lower()
+
+
+def _push_with_retry(push, training_project, *, source_dir, remote, attempts=4):
+    for attempt in range(1, attempts + 1):
+        try:
+            return push(training_project, source_dir=source_dir, remote=remote)
+        except Exception as exc:  # noqa: BLE001 - re-raised unless it is the race
+            if attempt == attempts or not _is_project_race(exc):
+                raise
+            print(
+                f"  Another job created project '{training_project.name}' first; "
+                f"retrying ({attempt}/{attempts - 1})."
+            )
+            time.sleep(2.0 * attempt)
+
+
 def _print_plan(training_project) -> None:
     print("\n--- dry run: Baseten training job that would be submitted ---")
     print(f"  project: {training_project.name}")
@@ -474,7 +508,9 @@ def launch(job_spec: JobSpec) -> Job | None:
         return None
 
     print("Submitting job...")
-    response = push(training_project, source_dir=source_dir, remote=remote.name)
+    response = _push_with_retry(
+        push, training_project, source_dir=source_dir, remote=remote.name
+    )
 
     job_id = response["id"]
     project_id = response["training_project"]["id"]
