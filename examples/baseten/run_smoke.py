@@ -143,6 +143,15 @@ def build_parser() -> argparse.ArgumentParser:
     mount.add_argument("--mount-path", default="/mnt/dataset", help="Where to mount it in the container")
 
     behaviour = parser.add_argument_group("behaviour")
+    behaviour.add_argument(
+        "--keep",
+        action="store_true",
+        help=(
+            "Leave the object the gcs test writes, so it can be looked at in "
+            "the console afterwards. The test deletes it by default, which also "
+            "proves delete permission."
+        ),
+    )
     behaviour.add_argument("--dry-run", action="store_true", help="Print the plan, submit nothing")
     behaviour.add_argument("--no-wait", action="store_true", help="Return as soon as the job is submitted")
     behaviour.add_argument("--stream-logs", action="store_true", help="Tail the remote logs locally")
@@ -235,7 +244,7 @@ def run_gcs(args: argparse.Namespace):
     func = smoke_tasks.gcs_roundtrip
     return launch_job(
         func=func,
-        config={"bucket": args.bucket, "prefix": ".coalesce/smoke"},
+        config={"bucket": args.bucket, "prefix": ".coalesce/smoke", "keep": args.keep},
         **_with_job_name(func, common_kwargs(args)),
     )
 

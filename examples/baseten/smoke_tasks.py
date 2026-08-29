@@ -147,11 +147,19 @@ def gcs_roundtrip(config: dict):
     for name in listed:
         print(f"  {name}")
 
+    # Deleting proves the last of the four permissions, but it also destroys the
+    # evidence. Keeping the object is what you want when a human is going to go
+    # and look at the bucket to confirm the job really wrote to it.
+    if config.get("keep"):
+        print(f"Keeping gs://{bucket_name}/{blob_name}")
+        print("\nGCS read, write and list all succeeded.")
+        return {"bucket": bucket_name, "blob": blob_name, "listed": len(listed), "kept": True}
+
     print("Cleaning up")
     bucket.blob(blob_name).delete()
 
     print("\nGCS read, write, list and delete all succeeded.")
-    return {"bucket": bucket_name, "blob": blob_name, "listed": len(listed)}
+    return {"bucket": bucket_name, "blob": blob_name, "listed": len(listed), "kept": False}
 
 
 def mounted_dataset_check(config: dict):
