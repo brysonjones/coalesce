@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
+import requests
 
 from coalesce import launcher, staging
 from coalesce.providers import baseten
@@ -544,3 +545,74 @@ def test_a_named_secret_pulls_from_any_registry(mock_push) -> None:
     assert auth.auth_method.value == "REGISTRY_SECRET"
     assert auth.registry == "ghcr.io"
     assert auth.registry_secret_docker_auth.secret_ref.name == "ghcr_token"
+
+
+def _project_race_error() -> requests.HTTPError:
+    """The error Baseten returns to whichever concurrent push lost the race."""
+    response = FakeResponse(
+        {
+            "message": "Constraint “Training project name uniqueness across "
+            "organization” is violated."
+        },
+        status_code=400,
+    )
+    error = requests.HTTPError("400 Client Error: Bad Request")
+    error.response = response
+    return error
+
+
+def test_losing_a_project_creation_race_is_retried_not_surfaced() -> None:
+    """Parallel launches into one project must not fail on the project itself.
+
+    Baseten creates the training project as a side effect of the first push, so
+    concurrent launches all try to create it and all but one are rejected -- even
+    though the project they wanted now exists.
+    """
+    attempts = []
+
+    def push(training_project, source_dir, remote):
+        attempts.append(remote)
+        if len(attempts) < 3:
+            raise _project_race_error()
+        return {"id": "job-1"}
+
+    project = Mock()
+    project.name = "shared-project"
+    with patch.object(baseten.time, "sleep"):
+        response = baseten._push_with_retry(
+            push, project, source_dir="/tmp/src", remote="baseten"
+        )
+
+    assert response == {"id": "job-1"}
+    assert len(attempts) == 3
+
+
+def test_a_push_failure_that_is_not_the_race_is_raised_immediately() -> None:
+    """A real rejection must not be retried into a slow, confusing failure."""
+    response = FakeResponse({"message": "GPU type T4 is not supported"}, status_code=400)
+    error = requests.HTTPError("400 Client Error: Bad Request")
+    error.response = response
+    attempts = []
+
+    def push(training_project, source_dir, remote):
+        attempts.append(remote)
+        raise error
+
+    project = Mock()
+    project.name = "shared-project"
+    with patch.object(baseten.time, "sleep"), pytest.raises(requests.HTTPError):
+        baseten._push_with_retry(push, project, source_dir="/tmp/src", remote="baseten")
+
+    assert len(attempts) == 1, "a non-race error should not be retried"
+
+
+def test_the_race_is_given_up_on_rather_than_retried_forever() -> None:
+    def push(training_project, source_dir, remote):
+        raise _project_race_error()
+
+    project = Mock()
+    project.name = "shared-project"
+    with patch.object(baseten.time, "sleep"), pytest.raises(requests.HTTPError):
+        baseten._push_with_retry(
+            push, project, source_dir="/tmp/src", remote="baseten", attempts=2
+        )
